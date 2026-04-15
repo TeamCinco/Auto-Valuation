@@ -4,90 +4,143 @@ Processes raw data for each ticker and computes valuation ratios.
 """
 
 import os
+import logging
+from dataclasses import dataclass, field
+
 import numpy as np
+import pandas as pd
+
 from data_loader import load_market_cap, load_cash_flow
 
+logger = logging.getLogger(__name__)
 
-def discover_tickers(input_dir):
-    """Scan flat folder for TICKER-market-cap.* and TICKER-cash-flow-statement-ttm.* pairs."""
-    files = [f for f in os.listdir(input_dir) if not f.startswith('.')]
-    mcap_files = {}
-    cf_files = {}
 
-    for f in files:
+@dataclass
+class QuarterData:
+    """Single quarter's valuation data for one ticker."""
+    date: pd.Timestamp
+    net_income: float | None = None
+    fcf: float | None = None
+    avg_mcap: float | None = None
+
+    @property
+    def pe(self) -> float | None:
+        if self.avg_mcap is None or self.net_income is None or self.net_income == 0:
+            return None
+        return round(self.avg_mcap / self.net_income, 2)
+
+    @property
+    def pfcf(self) -> float | None:
+        if self.avg_mcap is None or self.fcf is None or self.fcf == 0:
+            return None
+        return round(self.avg_mcap / self.fcf, 2)
+
+
+@dataclass
+class TickerResult:
+    """Full quarterly valuation history for one ticker."""
+    ticker: str
+    quarters: list[QuarterData] = field(default_factory=list)
+
+    # Convenience accessors for the excel writer
+    @property
+    def dates(self):       return [q.date for q in self.quarters]
+    @property
+    def net_income(self):  return [q.net_income for q in self.quarters]
+    @property
+    def fcf(self):         return [q.fcf for q in self.quarters]
+    @property
+    def avg_mcap(self):    return [q.avg_mcap for q in self.quarters]
+    @property
+    def avg_pe(self):      return [q.pe for q in self.quarters]
+    @property
+    def avg_pfcf(self):    return [q.pfcf for q in self.quarters]
+
+
+def discover_tickers(input_dir: str) -> list[tuple[str, str, str]]:
+    """Scan flat folder for TICKER-market-cap.* and TICKER-cash-flow-statement-ttm.* pairs.
+
+    Returns list of (ticker, mcap_path, cf_path) tuples.
+    """
+    VALID_EXT = {'.csv', '.xlsx'}
+    MCAP_MARKER = '-market-cap.'
+    CF_MARKER = '-cash-flow-statement-ttm.'
+
+    mcap_files: dict[str, str] = {}
+    cf_files: dict[str, str] = {}
+
+    for f in os.listdir(input_dir):
         fl = f.lower()
-        if not (fl.endswith('.csv') or fl.endswith('.xlsx')):
+        if not any(fl.endswith(ext) for ext in VALID_EXT):
             continue
-        if '-market-cap.' in fl:
-            ticker = f[:fl.index('-market-cap.')].upper()
+
+        if MCAP_MARKER in fl:
+            ticker = f[:fl.index(MCAP_MARKER)].upper()
             mcap_files[ticker] = os.path.join(input_dir, f)
-        elif '-cash-flow-statement-ttm.' in fl:
-            ticker = f[:fl.index('-cash-flow-statement-ttm.')].upper()
+        elif CF_MARKER in fl:
+            ticker = f[:fl.index(CF_MARKER)].upper()
             cf_files[ticker] = os.path.join(input_dir, f)
 
-    paired = sorted(set(mcap_files.keys()) & set(cf_files.keys()))
-    mcap_only = set(mcap_files.keys()) - set(cf_files.keys())
-    cf_only = set(cf_files.keys()) - set(mcap_files.keys())
+    paired = sorted(mcap_files.keys() & cf_files.keys())
 
-    if mcap_only:
-        print(f"WARNING: Market cap found but no cash flow for: {', '.join(sorted(mcap_only))}")
-    if cf_only:
-        print(f"WARNING: Cash flow found but no market cap for: {', '.join(sorted(cf_only))}")
+    for orphan in sorted(mcap_files.keys() - cf_files.keys()):
+        logger.warning("Market cap found but no cash flow for: %s", orphan)
+    for orphan in sorted(cf_files.keys() - mcap_files.keys()):
+        logger.warning("Cash flow found but no market cap for: %s", orphan)
 
     return [(t, mcap_files[t], cf_files[t]) for t in paired]
 
 
-def process_ticker(ticker, mcap_file, cf_file):
-    """Process one ticker -> dict with quarterly data and computed ratios."""
-    print(f"  Market cap:  {os.path.basename(mcap_file)}")
-    quarterly_mcap = load_market_cap(mcap_file)
+def _log_coverage(ticker: str, mcap_dates: list, cf_dates: list):
+    """Log date range diagnostics for a ticker."""
+    def _fmt(dates):
+        if not dates:
+            return "NONE"
+        return f"{len(dates)} quarters ({dates[0]:%Y-%m-%d} -> {dates[-1]:%Y-%m-%d})"
 
-    print(f"  Cash flow:   {os.path.basename(cf_file)}")
+    logger.info("  %s market cap:  %s", ticker, _fmt(mcap_dates))
+    logger.info("  %s cash flow:   %s", ticker, _fmt(cf_dates))
+
+    missing = set(cf_dates) - set(mcap_dates)
+    if missing:
+        logger.warning("  %s: %d cash flow quarters have NO market cap data", ticker, len(missing))
+
+
+def _safe_round(val, decimals=0) -> float | None:
+    """Round a value, returning None if it's None or NaN."""
+    if val is None:
+        return None
+    try:
+        if np.isnan(val):
+            return None
+    except (TypeError, ValueError):
+        pass
+    return round(float(val), decimals)
+
+
+def process_ticker(ticker: str, mcap_file: str, cf_file: str) -> TickerResult:
+    """Load data for one ticker and compute quarterly valuation ratios."""
+    quarterly_mcap = load_market_cap(mcap_file)
     cf_data = load_cash_flow(cf_file)
 
-    mcap_dates = sorted(quarterly_mcap.index)
-    cf_dates = sorted(cf_data.keys())
-    print(f"  Market cap:  {len(mcap_dates)} quarters ({mcap_dates[0].strftime('%Y-%m-%d') if mcap_dates else 'NONE'} -> {mcap_dates[-1].strftime('%Y-%m-%d') if mcap_dates else 'NONE'})")
-    print(f"  Cash flow:   {len(cf_dates)} quarters ({cf_dates[0].strftime('%Y-%m-%d') if cf_dates else 'NONE'} -> {cf_dates[-1].strftime('%Y-%m-%d') if cf_dates else 'NONE'})")
+    _log_coverage(ticker, sorted(quarterly_mcap.index), sorted(cf_data.keys()))
 
-    mcap_missing = set(cf_dates) - set(mcap_dates)
-    if mcap_missing:
-        print(f"  WARNING: {len(mcap_missing)} cash flow quarters have NO market cap data")
-
-    all_quarters = sorted(set(list(quarterly_mcap.index) + list(cf_data.keys())))
-
-    result = {
-        'ticker': ticker,
-        'quarters': [],
-        'net_income': [],
-        'fcf': [],
-        'avg_mcap': [],
-        'avg_pe': [],
-        'avg_pfcf': []
-    }
+    all_quarters = sorted(set(quarterly_mcap.index) | set(cf_data.keys()))
+    result = TickerResult(ticker=ticker)
 
     for q in all_quarters:
-        ni = cf_data.get(q, {}).get('net_income')
-        fcf = cf_data.get(q, {}).get('fcf')
-        mcap = quarterly_mcap.get(q)
+        cf = cf_data.get(q, {})
+        ni = cf.get('net_income')
+        fcf = cf.get('fcf')
 
         if ni is None and fcf is None:
             continue
 
-        result['quarters'].append(q)
-        result['net_income'].append(ni)
-        result['fcf'].append(fcf)
-        result['avg_mcap'].append(round(mcap, 0) if mcap is not None and not np.isnan(mcap) else None)
-
-        pe = None
-        pfcf = None
-        if mcap is not None and not np.isnan(mcap):
-            if ni is not None and ni != 0:
-                pe = round(float(mcap) / float(ni), 2)
-            if fcf is not None and fcf != 0:
-                pfcf = round(float(mcap) / float(fcf), 2)
-
-        result['avg_pe'].append(pe)
-        result['avg_pfcf'].append(pfcf)
+        result.quarters.append(QuarterData(
+            date=q,
+            net_income=ni,
+            fcf=fcf,
+            avg_mcap=_safe_round(quarterly_mcap.get(q), 0),
+        ))
 
     return result

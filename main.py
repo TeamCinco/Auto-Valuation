@@ -21,11 +21,14 @@ Example:
 
 import sys
 import os
+import logging
 import warnings
 warnings.filterwarnings('ignore')
 
 from calculations import discover_tickers, process_ticker
 from excel_writer import build_workbook
+
+logging.basicConfig(level=logging.INFO, format='%(message)s')
 
 
 def main():
@@ -59,7 +62,7 @@ def main():
     for ticker, mcap_path, cf_path in pairs:
         print(f"Processing {ticker}...")
         result = process_ticker(ticker, mcap_path, cf_path)
-        if result:
+        if result.quarters:
             all_data.append(result)
 
     if not all_data:

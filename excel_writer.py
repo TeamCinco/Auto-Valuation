@@ -38,7 +38,7 @@ def _write_summary_tables(ws, tickers):
     # ── PE ticker rows ──
     for i, td in enumerate(tickers):
         row = 3 + i
-        apply_cell(ws.cell(row, 2), td['ticker'], FONT_TICKER_SUMMARY, border=BORDER_BOX)
+        apply_cell(ws.cell(row, 2), td.ticker, FONT_TICKER_SUMMARY, border=BORDER_BOX)
         for c in range(3, 8):
             apply_cell(ws.cell(row, c), border=BORDER_BOX)
 
@@ -53,16 +53,10 @@ def _write_summary_tables(ws, tickers):
     # ── P FCF ticker rows ──
     for i, td in enumerate(tickers):
         row = 3 + i
-        apply_cell(ws.cell(row, 11), td['ticker'], FONT_TICKER_SUMMARY, border=BORDER_BOX)
+        apply_cell(ws.cell(row, 11), td.ticker, FONT_TICKER_SUMMARY, border=BORDER_BOX)
         for c in range(12, 17):
             apply_cell(ws.cell(row, c), border=BORDER_BOX)
 
-    # ── Instructions (right margin) ──
-    apply_cell(ws.cell(3, 43), 'Step 1', FONT_INSTRUCTION_BOLD)
-    apply_cell(ws.cell(3, 44), 'Fill out valuation area', FONT_INSTRUCTION)
-    apply_cell(ws.cell(4, 43), 'Stock Analysis, TTM CF statement', FONT_INSTRUCTION)
-    apply_cell(ws.cell(5, 43), 'Average market cap', FONT_INSTRUCTION)
-    apply_cell(ws.cell(7, 43), 'Step 2', FONT_INSTRUCTION_BOLD)
 
     return 3 + len(tickers)
 
@@ -79,22 +73,22 @@ def _write_detail_block(ws, td, start_row):
       Row 5: Average P FCF | val | val | ...
       Row 6: (blank separator)
     """
-    quarters = td['quarters']
+    quarters = td.dates
     n_q = len(quarters)
     r = start_row
 
     # ── Ticker header row (yellow background) ──
-    apply_cell(ws.cell(r, 1), td['ticker'], FONT_TICKER_DETAIL, FILL_TICKER_ROW, ALIGN_LEFT)
+    apply_cell(ws.cell(r, 1), td.ticker, FONT_TICKER_DETAIL, FILL_TICKER_ROW, ALIGN_LEFT)
     for j, q in enumerate(quarters):
         apply_cell(ws.cell(r, 2 + j), q.strftime('%Y-%m-%d'), FONT_DATE, FILL_TICKER_ROW, ALIGN_CENTER)
 
     # ── Data rows (no fill, no borders on data cells) ──
     row_defs = [
-        ('Net Income TTM',      td['net_income'], FMT_INT),
-        ('FCF TTM',             td['fcf'],        FMT_INT),
-        ('Average market cap',  td['avg_mcap'],   FMT_INT),
-        ('Average PE',          td['avg_pe'],     FMT_DEC2),
-        ('Average P FCF',       td['avg_pfcf'],   FMT_DEC2),
+        ('Net Income TTM',      td.net_income, FMT_INT),
+        ('FCF TTM',             td.fcf,        FMT_INT),
+        ('Average market cap',  td.avg_mcap,   FMT_INT),
+        ('Average PE',          td.avg_pe,     FMT_DEC2),
+        ('Average P FCF',       td.avg_pfcf,   FMT_DEC2),
     ]
 
     for k, (label, values, fmt) in enumerate(row_defs):
@@ -120,7 +114,7 @@ def build_workbook(tickers_data, output_path):
     current_row = last_summary_row + 2
 
     for td in tickers_data:
-        if not td['quarters']:
+        if not td.quarters:
             continue
         current_row = _write_detail_block(ws, td, current_row)
 
@@ -136,7 +130,7 @@ def build_workbook(tickers_data, output_path):
 
     max_data_col = 2
     for td in tickers_data:
-        max_data_col = max(max_data_col, 2 + len(td['quarters']))
+        max_data_col = max(max_data_col, 2 + len(td.quarters))
     for c in range(2, max_data_col + 1):
         cur = ws.column_dimensions[get_column_letter(c)].width or 0
         if cur < COL_WIDTH_DATA:
