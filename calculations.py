@@ -3,6 +3,8 @@ calculations.py
 Processes raw data for each ticker and computes valuation ratios.
 """
 
+from __future__ import annotations
+
 import os
 import logging
 from dataclasses import dataclass, field
